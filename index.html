@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>מנהל הוצאות חודשי</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- הוספת Babel לתרגום TSX בדפדפן -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      body {
+        font-family: 'Assistant', sans-serif;
+      }
+      @keyframes fade-in-out {
+        0%, 100% { opacity: 0; transform: translateX(-50%) translateY(10px); }
+        10%, 90% { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
+      .animate-save-indicator {
+        animation: fade-in-out 2s ease-in-out forwards;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/"
+  }
+}
+</script>
+</head>
+  <body class="bg-gray-900 text-gray-100">
+    <div id="root"></div>
+    <!-- שינוי סוג הסקריפט כדי ש-Babel יטפל בו -->
+    <script type="text/babel" data-type="module">
+import React, { useState, useEffect, useContext, createContext, useRef, useMemo } from 'react';
+import ReactDOM from 'react-dom/client';
+
+// =============================
+// === From types.ts
+// =============================
+interface Expense {
+  id: string;
+  description: string;
+  amount: number;
+  timestamp: string;
+}
+
+type ExpenseCategory = 'week1' | 'week2' | 'week3' | 'week4' | 'week5' | 'misc';
+
+interface Budgets {
+  week1: number;
+  week2: number;
+  week3: number;
+  week4: number;
+  week5: number;
+  misc: number;
+}
+
+interface AppData {
+  budgets: Budgets;
+  expenses: Record<ExpenseCategory, Expense[]>;
+}
+
+type Page = 'budget' | ExpenseCategory | 'summary';
+
+interface AppContextType {
+  data: AppData;
+  addExpense: (category: ExpenseCategory, expense: Omit<Expense, 'id' | 'timestamp'>) => void;
+  setBudgets: (newBudgets: Budgets) => void;
+  resetData: () => void;
+  isLoading: boolean;
+  showSaved: boolean;
+}
+
+// =============================
+// === From components/icons.tsx
+// =============================
+interface IconProps {
+  className?: string;
+}
+
+const BudgetIcon: React.FC<IconProps> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+  </svg>
+);
+
+const WeekIcon: React.FC<IconProps> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+  </svg>
+);
+
+const MiscIcon: React.FC<IconProps> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4" />
+  </svg>
+);
+
+const SummaryIcon: React.FC<IconProps> = ({ className }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <path strokeLinecap="round" strokeLinejoin="round" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+  </svg>
+);
+
+
+// =============================
+// === From hooks/useAppData.ts
+// =============================
+const AppContext = createContext<AppContextType | null>(null);
+
+const useAppData = () => {
+  const LOCAL_STORAGE_KEY = 'expense-tracker-data';
+
+  const initialData: AppData = {
+    budgets: {
+      week1: 0,
+      week2: 0,
+      week3: 0,
+      week4: 0,
+      week5: 0,
+      misc: 0,
+    },
+    expenses: {
+      week1: [],
+      week2: [],
+      week3: [],
+      week4: [],
+      week5: [],
+      misc: [],
+    },
+  };
+
+  const [data, setData] = useState<AppData>(initialData);
+  const [isLoading, setIsLoading] = useState(true);
+  const [showSaved, setShowSaved] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    try {
+      const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (storedData) {
+        setData(JSON.parse(storedData));
+      }
+    } catch (error) {
+      console.error("Failed to load data from localStorage", error);
+      setData(initialData);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isLoading) {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
+      } catch (error) {
+        console.error("Failed to save data to localStorage", error);
+      }
+    }
+  }, [data, isLoading]);
+
+  const triggerSaveIndicator = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+    }
+    setShowSaved(true);
+    timeoutRef.current = window.setTimeout(() => {
+      setShowSaved(false);
+    }, 2000);
+  };
+
+  const addExpense = (category: ExpenseCategory, expense: Omit<Expense, 'id' | 'timestamp'>) => {
+    const newExpense: Expense = {
+      ...expense,
+      id: new Date().toISOString() + Math.random(),
+      timestamp: new Date().toISOString(),
+    };
+    setData(prevData => ({
+      ...prevData,
+      expenses: {
+        ...prevData.expenses,
+        [category]: [newExpense, ...prevData.expenses[category]],
+      },
+    }));
+    triggerSaveIndicator();
+  };
+
+  const setBudgets = (newBudgets: Budgets) => {
+    setData(prevData => ({
+      ...prevData,
+      budgets: newBudgets,
+    }));
+    triggerSaveIndicator();
+  };
+
+  const resetData = () => {
+    setData(initialData);
+  };
+
+  return { data, addExpense, setBudgets, resetData, isLoading, showSaved };
+};
+
+// =============================
+// === From components/BottomNav.tsx
+// =============================
+interface BottomNavProps {
+  currentPage: Page;
+  setCurrentPage: (page: Page) => void;
+}
+
+const NavButton: React.FC<{
+  label: string;
+  page: Page;
+  currentPage: Page;
+  setCurrentPage: (page: Page) => void;
+  children: React.ReactNode;
+}> = ({ label, page, currentPage, setCurrentPage, children }) => {
+  const isActive = currentPage === page;
+  return (
+    <button
+      onClick={() => setCurrentPage(page)}
+      className={`flex-1 flex flex-col items-center justify-center p-2 transition-colors duration-200 ${isActive ? 'text-teal-400' : 'text-gray-400 hover:text-teal-300'}`}
+    >
+      {children}
+      <span className={`text-xs font-medium ${isActive ? 'font-bold' : ''}`}>{label}</span>
+    </button>
+  );
+};
+
+const WeekButtons: React.FC<BottomNavProps> = ({ currentPage, setCurrentPage }) => {
+  const weeks: ('week1' | 'week2' | 'week3' | 'week4' | 'week5')[] = ['week1', 'week2', 'week3', 'week4', 'week5'];
+  
+  const isAnyWeekActive = weeks.includes(currentPage as any);
+
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center group relative">
+        <div className={`flex flex-col items-center justify-center p-2 transition-colors duration-200 ${isAnyWeekActive ? 'text-teal-400' : 'text-gray-400'}`}>
+            <WeekIcon className="h-6 w-6" />
+            <span className={`text-xs font-medium ${isAnyWeekActive ? 'font-bold' : ''}`}>שבועות</span>
+        </div>
+        <div className="absolute bottom-full mb-2 w-max grid grid-cols-5 gap-1 bg-gray-700 p-2 rounded-lg shadow-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
+            {weeks.map((week, index) => (
+                <button
+                    key={week}
+                    onClick={() => setCurrentPage(week)}
+                    className={`px-3 py-2 text-sm rounded-md ${currentPage === week ? 'bg-teal-500 text-white' : 'text-gray-200 hover:bg-gray-600'}`}
+                >
+                    {`שבוע ${index + 1}`}
+                </button>
+            ))}
+        </div>
+    </div>
+  );
+};
+
+const BottomNav: React.FC<BottomNavProps> = ({ currentPage, setCurrentPage }) => {
+  return (
+    <nav className="fixed bottom-0 left-0 right-0 bg-gray-800 border-t border-gray-700 shadow-lg flex justify-around">
+      <NavButton label="סיכום" page="summary" currentPage={currentPage} setCurrentPage={setCurrentPage}>
+        <SummaryIcon className="h-6 w-6" />
+      </NavButton>
+      <NavButton label="שונות" page="misc" currentPage={currentPage} setCurrentPage={setCurrentPage}>
+        <MiscIcon className="h-6 w-6" />
+      </NavButton>
+      <WeekButtons currentPage={currentPage} setCurrentPage={setCurrentPage} />
+      <NavButton label="תקציב" page="budget" currentPage={currentPage} setCurrentPage={setCurrentPage}>
+        <BudgetIcon className="h-6 w-6" />
+      </NavButton>
+    </nav>
+  );
+};
+
+
+// =============================
+// === From components/BudgetPage.tsx
+// =============================
+const BudgetPage: React.FC = () => {
+  const context = useContext(AppContext);
+  const [localBudgets, setLocalBudgets] = useState<Budgets>({
+    week1: 0, week2: 0, week3: 0, week4: 0, week5: 0, misc: 0
+  });
+  const [isSaved, setIsSaved] = useState(false);
+
+  useEffect(() => {
+    if (context && !context.isLoading) {
+      setLocalBudgets(context.data.budgets);
+    }
+  }, [context]);
+
+  if (!context || context.isLoading) return <div className="text-center p-8">טוען נתונים...</div>;
+
+  const handleBudgetChange = (category: keyof Budgets, value: string) => {
+    const amount = Number(value) >= 0 ? Number(value) : 0;
+    setLocalBudgets(prev => ({ ...prev, [category]: amount }));
+    setIsSaved(false);
+  };
+
+  const handleSave = () => {
+    context.setBudgets(localBudgets);
+    setIsSaved(true);
+    setTimeout(() => setIsSaved(false), 2000);
+  };
+
+  const totalBudget = Object.values(localBudgets).reduce((sum: number, val: number) => sum + val, 0);
+  
+  const weekLabels: { key: keyof Budgets; label: string }[] = [
+    { key: 'week1', label: 'שבוע 1' },
+    { key: 'week2', label: 'שבוע 2' },
+    { key: 'week3', label: 'שבוע 3' },
+    { key: 'week4', label: 'שבוע 4' },
+    { key: 'week5', label: 'שבוע 5' },
+    { key: 'misc', label: 'הוצאות שונות' },
+  ];
+
+  return (
+    <div className="p-4 pt-8 md:p-8 space-y-6">
+      <h1 className="text-3xl font-bold text-center text-teal-400">הגדרת תקציב חודשי</h1>
+      
+      <div className="bg-gray-800 p-6 rounded-lg shadow-lg space-y-4">
+        {weekLabels.map(({ key, label }) => (
+          <div key={key} className="flex items-center justify-between">
+            <label htmlFor={key} className="text-lg font-medium text-gray-300">{label}</label>
+            <div className="relative">
+              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">₪</span>
+              <input
+                id={key}
+                type="number"
+                value={localBudgets[key] === 0 ? '' : localBudgets[key]}
+                onChange={(e) => handleBudgetChange(key, e.target.value)}
+                placeholder="0"
+                className="w-32 bg-gray-700 text-white text-lg font-semibold rounded-md border-2 border-gray-600 focus:border-teal-500 focus:ring-teal-500 p-2 text-left pr-8"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      
+      <div className="bg-gray-800 p-4 rounded-lg shadow-lg flex items-center justify-between">
+        <span className="text-xl font-bold text-gray-300">סך הכל תקציב:</span>
+        <span className="text-2xl font-bold text-teal-400">₪{totalBudget.toLocaleString()}</span>
+      </div>
+
+      <button
+        onClick={handleSave}
+        className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition-transform duration-200 active:scale-95"
+      >
+        {isSaved ? 'נשמר בהצלחה!' : 'שמור תקציב'}
+      </button>
+    </div>
+  );
+};
+
+
+// =============================
+// === From components/ExpensePage.tsx
+// =============================
+interface ExpensePageProps {
+  category: ExpenseCategory;
+  title: string;
+}
+
+const ExpenseForm: React.FC<{ category: ExpenseCategory }> = ({ category }) => {
+  const context = useContext(AppContext);
+  const [description, setDescription] = useState('');
+  const [amount, setAmount] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (description.trim() && Number(amount) > 0) {
+      context?.addExpense(category, { description, amount: Number(amount) });
+      setDescription('');
+      setAmount('');
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-gray-800 p-4 rounded-lg shadow-lg space-y-4">
+      <h2 className="text-xl font-semibold text-center text-gray-200">הוספת הוצאה חדשה</h2>
+      <div>
+        <label htmlFor="description" className="block text-sm font-medium text-gray-400 mb-1">פירוט ההוצאה</label>
+        <input
+          id="description"
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="למשל: קניות בסופר"
+          className="w-full bg-gray-700 text-white rounded-md border border-gray-600 focus:border-teal-500 focus:ring-teal-500 p-2"
+          required
+        />
+      </div>
+      <div>
+        <label htmlFor="amount" className="block text-sm font-medium text-gray-400 mb-1">סכום</label>
+        <div className="relative">
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">₪</span>
+            <input
+            id="amount"
+            type="number"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            placeholder="0"
+            className="w-full bg-gray-700 text-white rounded-md border border-gray-600 focus:border-teal-500 focus:ring-teal-500 p-2 text-left pr-8"
+            required
+            />
+        </div>
+      </div>
+      <button type="submit" className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2 px-4 rounded-lg transition-transform duration-200 active:scale-95">
+        הוסף הוצאה
+      </button>
+    </form>
+  );
+};
+
+const ExpenseList: React.FC<{ expenses: Expense[] }> = ({ expenses }) => {
+  if (expenses.length === 0) {
+    return (
+      <div className="text-center py-10 px-4 bg-gray-800 rounded-lg">
+        <p className="text-gray-400">לא נרשמו הוצאות עדיין.</p>
+        <p className="text-gray-500 text-sm">התחילו על ידי הוספת הוצאה חדשה.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+        <div className="overflow-x-auto">
+            <table className="w-full text-right">
+                <thead className="bg-gray-700">
+                <tr>
+                    <th className="p-3 text-sm font-semibold text-gray-300">תאריך</th>
+                    <th className="p-3 text-sm font-semibold text-gray-300">פירוט</th>
+                    <th className="p-3 text-sm font-semibold text-gray-300 text-left">סכום</th>
+                </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700">
+                {expenses.map(expense => (
+                    <tr key={expense.id}>
+                    <td className="p-3 text-sm text-gray-400 whitespace-nowrap">
+                        {new Date(expense.timestamp).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit' })}
+                        <br/>
+                        {new Date(expense.timestamp).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="p-3 text-gray-200">{expense.description}</td>
+                    <td className="p-3 text-lg font-mono text-left text-red-400">₪{expense.amount.toLocaleString()}</td>
+                    </tr>
+                ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+  );
+};
+
+const ExpensePage: React.FC<ExpensePageProps> = ({ category, title }) => {
+  const context = useContext(AppContext);
+
+  if (!context || context.isLoading) return <div className="text-center p-8">טוען נתונים...</div>;
+
+  const budget = context.data.budgets[category];
+  const expenses = context.data.expenses[category];
+  
+  const totalExpenses = useMemo(() => expenses.reduce((sum, exp) => sum + exp.amount, 0), [expenses]);
+  const balance = budget - totalExpenses;
+
+  return (
+    <div className="p-4 pt-8 md:p-8 space-y-6">
+      <h1 className="text-3xl font-bold text-center text-teal-400">{title}</h1>
+      
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+        <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+          <p className="text-sm text-gray-400">תקציב</p>
+          <p className="text-2xl font-bold text-green-400">₪{budget.toLocaleString()}</p>
+        </div>
+        <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+          <p className="text-sm text-gray-400">סה"כ הוצאות</p>
+          <p className="text-2xl font-bold text-red-400">₪{totalExpenses.toLocaleString()}</p>
+        </div>
+        <div className="bg-gray-800 p-4 rounded-lg shadow-lg">
+          <p className="text-sm text-gray-400">יתרה</p>
+          <p className={`text-2xl font-bold ${balance >= 0 ? 'text-blue-400' : 'text-orange-500'}`}>₪{balance.toLocaleString()}</p>
+        </div>
+      </div>
+      
+      <ExpenseForm category={category} />
+      <ExpenseList expenses={expenses} />
+    </div>
+  );
+};
+
+
+// =============================
+// === From components/SummaryPage.tsx
+// =============================
+const StatCard: React.FC<{ title: string; value: number; color: string; currency?: boolean; }> = ({ title, value, color, currency = true }) => (
+  <div className="bg-gray-800 p-6 rounded-lg shadow-lg text-center">
+    <h2 className="text-lg font-semibold text-gray-400 mb-2">{title}</h2>
+    <p className={`text-4xl font-bold ${color}`}>
+      {currency && '₪'}{value.toLocaleString()}
+    </p>
+  </div>
+);
+
+const SummaryPage: React.FC = () => {
+  const context = useContext(AppContext);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const currentMonth = useMemo(() => new Date().toLocaleString('he-IL', { month: 'long', year: 'numeric' }), []);
+
+  if (!context || context.isLoading) return <div className="text-center p-8">טוען נתונים...</div>;
+
+  const { budgets, expenses } = context.data;
+
+  const totalBudget = Object.values(budgets).reduce((sum: number, b: number) => sum + b, 0);
+  const allExpenses: Expense[] = Object.values(expenses).flat();
+  const totalExpenses = allExpenses.reduce((sum, e) => sum + e.amount, 0);
+  const remainingBalance = totalBudget - totalExpenses;
+
+  const handleReset = () => {
+    context.resetData();
+    setShowResetConfirm(false);
+  };
+
+  return (
+    <div className="p-4 pt-8 md:p-8 space-y-8">
+      <div className="text-center">
+        <h1 className="text-3xl font-bold text-teal-400">סיכום חודשי</h1>
+        <p className="text-lg text-gray-400">{currentMonth}</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard title="תקציב כולל" value={totalBudget} color="text-green-400" />
+        <StatCard title="סה״כ הוצאות" value={totalExpenses} color="text-red-400" />
+        <StatCard title="יתרה כוללת" value={remainingBalance} color={remainingBalance >= 0 ? 'text-blue-400' : 'text-orange-500'} />
+      </div>
+
+      <div className="pt-4">
+        <button
+          onClick={() => setShowResetConfirm(true)}
+          className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg text-lg transition-transform duration-200 active:scale-95"
+        >
+          איפוס כל הנתונים
+        </button>
+      </div>
+
+      {showResetConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg shadow-2xl p-6 text-center max-w-sm w-full">
+            <h3 className="text-xl font-bold text-white mb-4">אישור איפוס נתונים</h3>
+            <p className="text-gray-300 mb-6">האם אתה בטוח? פעולה זו תמחק את כל התקציבים וההוצאות שהזנת. לא ניתן לשחזר את הנתונים.</p>
+            <div className="flex justify-center gap-4">
+              <button
+                onClick={() => setShowResetConfirm(false)}
+                className="bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-6 rounded-lg transition"
+              >
+                ביטול
+              </button>
+              <button
+                onClick={handleReset}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-lg transition"
+              >
+                אפס נתונים
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
+// =============================
+// === From App.tsx
+// =============================
+const SaveIndicator: React.FC = () => {
+  const context = useContext(AppContext);
+
+  if (!context?.showSaved) {
+    return null;
+  }
+
+  return (
+    <div 
+      className="fixed bottom-24 left-1/2 bg-teal-500 text-white px-4 py-2 rounded-full shadow-lg text-sm font-semibold flex items-center z-50 animate-save-indicator"
+      role="status"
+      aria-live="polite"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline-block ml-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+      </svg>
+      הנתונים נשמרו אוטומטית
+    </div>
+  );
+};
+
+const pageTitles: { [key in Page]: string } = {
+    budget: 'הגדרת תקציב',
+    week1: 'הוצאות שבוע 1',
+    week2: 'הוצאות שבוע 2',
+    week3: 'הוצאות שבוע 3',
+    week4: 'הוצאות שבוע 4',
+    week5: 'הוצאות שבוע 5',
+    misc: 'הוצאות שונות',
+    summary: 'סיכום והגדרות'
+};
+
+const App: React.FC = () => {
+  const appData = useAppData();
+  const [currentPage, setCurrentPage] = useState<Page>('summary');
+
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'budget':
+        return <BudgetPage />;
+      case 'summary':
+        return <SummaryPage />;
+      case 'week1':
+      case 'week2':
+      case 'week3':
+      case 'week4':
+      case 'week5':
+      case 'misc':
+        return <ExpensePage category={currentPage} title={pageTitles[currentPage]} />;
+      default:
+        return <SummaryPage />;
+    }
+  };
+
+  return (
+    <AppContext.Provider value={appData}>
+      <div className="min-h-screen bg-gray-900 text-gray-100">
+        <main className="pb-24">
+          {renderPage()}
+        </main>
+        <BottomNav currentPage={currentPage} setCurrentPage={setCurrentPage} />
+        <SaveIndicator />
+      </div>
+    </AppContext.Provider>
+  );
+};
+
+
+// =============================
+// === Original render logic from index.tsx
+// =============================
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+    </script>
+  </body>
+</html>
