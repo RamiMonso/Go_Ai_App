@@ -8,6 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Assistant:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <!-- הוספת Babel לתרגום TSX בדפדפן -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <style>
       body {
         font-family: 'Assistant', sans-serif;
@@ -32,6 +34,7 @@
 </head>
   <body class="bg-gray-900 text-gray-100">
     <div id="root"></div>
-    <script type="module" src="index.tsx"></script>
+    <!-- שינוי סוג הסקריפט כדי ש-Babel יטפל בו -->
+    <script type="text/babel" data-type="module" src="index.tsx"></script>
   </body>
 </html>
